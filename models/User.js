@@ -1,63 +1,54 @@
-import mongoose from "mongoose";
+import { DataTypes } from "sequelize";
+import sequelize from "../db/index.js";
 
-import address from "./Address.js";
-
-/* const addressSchema = new mongoose.Schema({
-  label: { type: String, default: "shippingAddress" }, // e.g. Home, Work, etc.
-  firstName: { type: String },
-  lastName: String,
-  streetAddress: { type: String, required: true },
-  zipCode: { type: String, required: true },
-  city: { type: String, required: true },
-  state: { type: String },
-  country: { type: String, required: true },
-  phone: { type: String },
-});
- */
-const userSchema = new mongoose.Schema({
+// Define the User model with its attributes and options
+const User = sequelize.define("User", {
   email: {
-    type: String,
-    required: true,
-    unique: true,
+    type: DataTypes.STRING,
+    allowNull: false, //replaces mongoose requird:true,
+    unique: true, //same as mongoose unique:true
   },
   password: {
-    type: String,
-    required: true,
-    select: false, // Exclude password from queries by default
+    type: DataTypes.STRING,
+    allowNull: false,
   },
-  cartId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Cart",
-    required: true,
-  },
-  favoriteProducts: [{ type: mongoose.Schema.Types.ObjectId, ref: "Product" }],
   role: {
-    type: String,
-    enum: ["user", "admin"],
-    default: "user",
+    type: DataTypes.ENUM("user", "admin"),
+    allowNull: false,
+    defaultValue: "user", //mongoose default, sequelize defaultValue
   },
-  /*  firstName: String,
-  lastName: String,
-  phone: String,
-  streetAddress: String,
-  city: String,
-  state: String,
-  zipCode: String,
-  country: String, */
-  addresses: [{ type: mongoose.Schema.Types.ObjectId, ref: "Address" }],
-  defaultAddress: { type: mongoose.Schema.Types.ObjectId, ref: "Address" }, //address id
-  userAvatar: { type: String },
-  resetToken: String,
-  resetTokenExpiration: Date,
+  userAvatar: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  resetToken: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  resetTokenExpiration: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  // FK for the default shipping address
+  // Sequelize will automatically create a foreign key column in the Addresses table named defaultAddressId that references the id column of the Addresses table. This allows us to associate a default shipping address with each user.
+  defaultAddressId: {
+    type: DataTypes.INTEGER,
+    allowNull: true, // This field can be null if the user hasn't set a default address
+    references: {
+      model: "Addresses",
+      key: "id",
+    },
+    onDelete: "SET NULL", // If the referenced address is deleted, set defaultAddressId to null
+  },
+  // way to exclude password from the response when we fetch user data (alternativ to mongoose select:false)
+  defaultScope: {
+    attributes: { exclude: ["password"] }, //take all excluding password
+  },
+  scopes: {
+    withPassword: { attributes: {} }, //take all including password
+  },
 });
 
-const User = mongoose.model("User", userSchema);
-
-// define a mongoose instance method to clear the user cart
-
-/* userSchema.methods.clearCart = async () => {
-  this.cartId = null;
-  await this.save();
-}; */
-
+/* User.findAll(): without password.
+User.scope('withPassword').findOne(): with passwort). */
 export default User;

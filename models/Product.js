@@ -1,90 +1,68 @@
-import mongoose from "mongoose";
+import { DataTypes } from "sequelize";
+import sequelize from "../db/index.js";
 
-const productSchema = new mongoose.Schema(
+const CATEGORIES = [
+  "Electronics",
+  "Jewelry",
+  "Men's Clothing",
+  "Women's Clothing",
+  "Kids's Clothing",
+  "Books",
+  "Home",
+  "Beauty",
+  "Sports",
+  "Other",
+];
+const Product = sequelize.define(
+  "Product",
   {
     title: {
-      type: String,
-      required: true,
+      type: DataTypes.STRING,
+      allowNull: false,
     },
-
     price: {
-      type: Number,
-      required: true,
-      min: 0, // optional guard
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
     },
-
     description: {
-      type: String,
-      required: true,
+      type: DataTypes.TEXT,
+      allowNull: false,
     },
     category: {
-      type: String,
-      enum: [
-        "Electronics",
-        "Jewelry",
-        "Men's Clothing",
-        "Women's Clothing",
-        "Kids's Clothing",
-        "Books",
-        "Home",
-        "Beauty",
-        "Sports",
-        "Other",
-      ],
-      default: "Other",
+      type: DataTypes.ENUM(...CATEGORIES),
+      allowNull: false,
+      defaultValue: "Other",
     },
     image: {
-      type: String,
-      required: true,
+      type: DataTypes.STRING,
+      allowNull: false,
     },
-    // Optional fields that are often useful in e‑commerce
     stock: {
-      type: Number,
-      default: 0,
-      min: [0, "Stock cannot be negative"],
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
     },
-    /* isFavorite: {
-      type: Boolean,
-      default: false,
-    }, */
-
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-
-    // multiple reviews stored here
-    /*  reviews: {
-    type: [reviewSchema],
-    default: []  // IMPORTANT
-  }, */
-    reviews: {
-      type: [mongoose.Schema.Types.ObjectId],
-      ref: "Review",
-      default: [],
-    },
-
-    // store average rating for quick access
     averageRating: {
-      type: Number,
+      type: DataTypes.DECIMAL(2, 1),
     },
     weight: {
-      type: Number,
-      required: true,
-      min: 0, // optional guard
+      type: DataTypes.FLOAT,
+      allowNull: false,
     },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: { model: "Users", key: "id" },
+      onDelete: "CASCADE", //when user is deleted, delete all products of that user (optional, but makes sense in this case)
+    },
+    orderId:{
+      type: DataTypes.INTEGER,
+
+    }
   },
   {
     timestamps: true, // adds createdAt & updatedAt
   },
-
-  // adds createdAt & updatedAt
 );
-
-// Add a text index for title and description (MongoDB will use this index to perform text searches with the $text operator.-> $text: { $search: "query" } is equivalent to $or: [{ title: { $regex: "query", $options: "i" } }, { description: { $regex: "query", $options: "i" } }] but much faster)
-productSchema.index({ title: "text", description: "text", category: "text" });
-
-const Product = mongoose.model("Product", productSchema);
 
 export default Product;
