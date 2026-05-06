@@ -1,24 +1,33 @@
-import mongoose from "mongoose";
-const reviewSchema = new mongoose.Schema(
+import { DataTypes } from "sequelize";
+import sequelize from "../db/index.js";
+
+const Review = sequelize.define(
+  "Review",
   {
-    product: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Product",
-      required: true,
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: { model: "Products", key: "id" },
+      onDelete: "CASCADE", //when product is deleted, delete all reviews of that product
     },
-    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: { model: "Users", key: "id" },
+      onDelete: "CASCADE", //when user is deleted, delete all reviews of that user
+    },
     rating: {
-      type: Number,
-      min: [0, "Rating cannot be below 0"],
-      max: [5, "Rating cannot exceed 5"],
-      default: 0,
+      type: DataTypes.DECIMAL(2, 1),
+      allowNull: false,
     },
     comment: {
-      type: String,
+      type: DataTypes.TEXT,
+      allowNull: false,
     },
   },
-  { timestamps: true }
+  {
+    timestamps: true, // adds createdAt & updatedAt
+  },
 );
 
-const Review = mongoose.model("Review", reviewSchema);
 export default Review;

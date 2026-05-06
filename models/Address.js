@@ -1,18 +1,54 @@
-import mongoose from "mongoose";
+import sequelize from "../db/index.js";
+import { DataTypes } from "sequelize";
+import User from "./User.js";
 
-export const addressSchema = new mongoose.Schema({
-  firstName: String,
-  lastName: String,
-  companyName: String,
-  phone: String,
-  streetAddress: String,
-  city: String,
-  state: String,
-  zipCode: String,
-  country: String,
-  label: { type: String, default: "shippingAddress" }, // e.g. Home, Work, etc.
+// Define the Address model with its attributes and options
+
+const Address = sequelize.define("Address", {
+  userId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {
+      model: "Users",
+      key: "id",
+    },
+    onDelete: "CASCADE", // If the associated user is deleted, delete the address as well
+  },
+  firstName: {
+    type: DataTypes.STRING,
+  },
+  lastName: {
+    type: DataTypes.STRING,
+  },
+  companyName: {
+    type: DataTypes.STRING,
+  },
+  phone: {
+    type: DataTypes.STRING,
+  },
+  streetAddress: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  city: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  state: {
+    type: DataTypes.STRING,
+  },
+  zipCode: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  country: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  label: {
+    type: DataTypes.STRING,
+    defaultValue: "shippingAddress",
+  },
 });
-
-const Address = mongoose.model("Address", addressSchema);
 
 export default Address;

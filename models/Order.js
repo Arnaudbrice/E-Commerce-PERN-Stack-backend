@@ -1,84 +1,69 @@
-import mongoose from "mongoose";
+import { DataTypes } from "sequelize";
+import sequelize from "../db/index.js";
 
-const orderSchema = new mongoose.Schema(
+const Order = sequelize.define(
+  "Order",
   {
     userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: "Users",
+        key: "id",
+      },
     },
-    products: [
-      //array of products in the order, each with its own productId, image, title, description, price, and quantity.
-      {
-        productId: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Product",
-          required: true,
-        },
-        image: {
-          type: String,
-          required: true,
-        },
-        title: {
-          type: String,
-          required: true,
-        },
-        description: {
-          type: String,
-          required: true,
-        },
-        price: {
-          type: Number,
-          required: true,
-          min: 0,
-        },
-        quantity: {
-          type: Number,
-          required: true,
-        },
-      },
-    ],
-    shippingAddress: {
-      firstName: {
-        type: String,
-        required: function () {
-          return !this.isAdminOrder; //admin orders do not require firstName
-        },
-      },
-      lastName: {
-        type: String,
-        required: function () {
-          return !this.isAdminOrder; //admin orders do not require lastName
-        },
-      },
-      companyName: { type: String },
-      streetAddress: { type: String, required: true },
-      zipCode: { type: String, required: true },
-      city: { type: String, required: true },
-      state: { type: String },
-
-      country: { type: String, required: true },
-    },
-
     isAdminOrder: {
-      type: Boolean,
-      default: false,
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
     },
     status: {
-      type: String,
-      enum: ["processing", "shipped", "delivered", "cancelled"],
-      default: "processing",
+      type: DataTypes.ENUM("processing", "shipped", "delivered", "cancelled"),
+      allowNull: false,
+      defaultValue: "processing",
     },
     shippingCosts: {
-      type: Number,
-      default: 0,
-      min: 0,
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+    },
+
+    firstName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    lastName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    companyName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    streetAddress: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    zipCode: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    city: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    state: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    country: {
+      type: DataTypes.STRING,
+      allowNull: false,
     },
   },
-  { timestamps: true },
-  // { timestamps: true }
-  // add createdAt and updatedAt fields
+  {
+    timestamps: true, // adds createdAt & updatedAt
+  },
 );
 
-const Order = mongoose.model("Order", orderSchema);
 export default Order;

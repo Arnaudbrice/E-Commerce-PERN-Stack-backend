@@ -1,51 +1,19 @@
-import mongoose from "mongoose";
+import sequelize from "../db/index.js";
+import { DataTypes } from "sequelize";
 
-const cartSchema = new mongoose.Schema({
+// Define the Cart model with its attributes and options
+
+const Cart = sequelize.define("Cart", {
   userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
-    required: true,
-  },
-  products: [
-    {
-      productId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Product",
-        required: true,
-      },
-
-      quantity: {
-        type: Number,
-        default: 0,
-      },
-      //!ensure image,title, price, description are available,event if the product is deleted
-      image: {
-        type: String,
-        required: true,
-      },
-
-      title: {
-        type: String,
-        required: true,
-      },
-      price: {
-        type: Number,
-        required: true,
-        min: 0,
-      },
-      weight: {
-        type: Number,
-        // required: true,
-        min: 0,
-      },
-      description: {
-        type: String,
-        required: true,
-      },
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    unique: true, // Each user can have only one cart
+    references: {
+      model: "Users",
+      key: "id",
     },
-  ],
+    onDelete: "CASCADE",
+  },
 });
-
-const Cart = mongoose.model("Cart", cartSchema);
 
 export default Cart;
