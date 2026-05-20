@@ -7,6 +7,7 @@ import Review from "./Review.js";
 import Order from "./Order.js";
 import OrderItem from "./OrderItem.js";
 import UserFavorites from "./UserFavorites.js";
+import sequelize from "../db/index.js";
 
 /****************************************
  *           User/Address relationships
@@ -15,14 +16,14 @@ import UserFavorites from "./UserFavorites.js";
 User.hasMany(Address, {
   foreignKey: "userId", // foreign key column in Address that references User.id
   as: "addresses",
-  onDelete: "CASCADE",
-}); //user.addresses -> array of addresses for that user
+});
 Address.belongsTo(User, {
   foreignKey: "userId", // foreign key column in Address that references User.id
+  onDelete: "SET NULL", //User deleted -> Address not deleted
   as: "user",
 }); //address.user -> user for that address
 
-// User/Address (1:1) relationship
+// ── User ↔ Address (1:1)
 // A user can point to one address as the default address
 User.belongsTo(Address, {
   foreignKey: "defaultAddressId", // foreign key column in User that references Address.id
@@ -41,6 +42,7 @@ User.hasOne(Cart, {
 });
 Cart.belongsTo(User, {
   foreignKey: "userId",
+  onDelete: "CASCADE", //User deleted -> Cart deleted
   as: "user",
 });
 
@@ -48,37 +50,54 @@ Cart.belongsTo(User, {
 Cart.hasMany(CartItem, {
   foreignKey: "cartId",
   as: "items",
-  onDelete: "CASCADE",
 });
 CartItem.belongsTo(Cart, {
   foreignKey: "cartId",
+  onDelete: "CASCADE", //Cart deleted  -> CartItem deleted
   as: "cart",
 });
 
 // ── Product ↔  CartItem (1:N)
-Product.hasMany(CartItem, { foreignKey: "productId", as: "cartItems" });
+Product.hasMany(CartItem, {
+  foreignKey: "productId",
+  as: "cartItems",
+});
 
-CartItem.belongsTo(Product, { foreignKey: "productId", as: "product" });
+CartItem.belongsTo(Product, {
+  foreignKey: "productId",
+  as: "product",
+  onDelete: "CASCADE", //Product deleted -> CartItem deleted
+});
 
 // ── User ↔ Product (1:N) ──
-User.hasMany(Product, { foreignKey: "userId", as: "products" });
-Product.belongsTo(User, { foreignKey: "userId", as: "user" });
+User.hasMany(Product, { foreignKey: "userId", as: "createdProducts" });
+Product.belongsTo(User, {
+  foreignKey: "userId",
+  as: "creator",
+  onDelete: "SET NULL", //User (admin) deleted -> set userId in Product table to null(userId=null) ->Product not deleted
+});
 
 // ── Product ↔ Review(1:N) ──
 Product.hasMany(Review, {
   foreignKey: "productId",
   as: "reviews",
-  onDelete: "CASCADE",
 }); // when product is deleted, delete all reviews of that product
-Review.belongsTo(Product, { foreignKey: "productId", as: "product" });
+Review.belongsTo(Product, {
+  foreignKey: "productId",
+  as: "product",
+  onDelete: "CASCADE", //product deleted -> review deleted
+});
 
 // ── User ↔ Review(1:N) ──
 User.hasMany(Review, {
   foreignKey: "userId",
-  onDelete: "CASCADE",
   as: "reviews",
 }); // when user is deleted, delete all reviews of that user
-Review.belongsTo(User, { foreignKey: "userId", as: "user" });
+Review.belongsTo(User, {
+  foreignKey: "userId",
+  as: "user",
+  onDelete: "SET NULL", // user deleted-> userId in review=null-> review not deleted
+});
 
 // ── User ↔ Order(1:N) ──
 User.hasMany(Order, {
@@ -89,17 +108,20 @@ User.hasMany(Order, {
 Order.belongsTo(User, {
   foreignKey: "userId",
   as: "user",
+  onDelete: "RESTRICT", //!prevent deletion of user if they have orders (order history should always be kept on e-commerce websites) ,
 });
 
 // ── Order ↔ OrderItem(1:N) ──
 Order.hasMany(OrderItem, {
   foreignKey: "orderId",
+
   as: "orderItems",
 });
 
 OrderItem.belongsTo(Order, {
   foreignKey: "orderId",
   as: "order",
+  onDelete: "CASCADE", //order deleted -> orderItem deleted
 });
 
 // product can exists without orderItem, but OrderItem cannot exist without product , so product is the strong entity
@@ -112,11 +134,12 @@ Product.hasMany(OrderItem, {
 OrderItem.belongsTo(Product, {
   foreignKey: "productId",
   as: "product",
+  onDelete: "RESTRICT", //!prevent deletion of product if it has order items (we don't want to lose order history) ,
 });
 
 // A User can have many favorite Products and a Product can be the favorite of many users(M:N)
 // ── User ↔ Product (M:N) ──
-/* through: 'UserFavorites' tells Sequelize to create an intermediary table named UserFavorites to handle the many-to-many relationship */
+/* through: 'UserFavorites' tells Sequelize to create an intermediary table named UserFavorites to handle the many-to-many relationship (constraints in the intermediary table) */
 User.belongsToMany(Product, {
   through: UserFavorites,
   as: "favoriteProducts",
@@ -125,10 +148,13 @@ User.belongsToMany(Product, {
 });
 Product.belongsToMany(User, {
   through: UserFavorites,
-  as: "favoriteUsers",
+  as: "favoritedBy",
   foreignKey: "productId",
   otherKey: "userId",
 });
+
+//create/update tables automatically based on the defined models
+await sequelize.sync();
 
 export {
   User,
@@ -140,4 +166,5 @@ export {
   Order,
   OrderItem,
   UserFavorites,
+  sequelize,
 };
