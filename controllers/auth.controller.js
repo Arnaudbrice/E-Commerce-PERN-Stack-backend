@@ -1,4 +1,5 @@
-import User from "../models/User.js";
+import User from "../models/index.js";
+import Cart from "../models/index.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import sgMail from "@sendgrid/mail";
@@ -7,7 +8,6 @@ import nodemailer from "nodemailer";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import Address from "../models/Address.js";
-import Cart from "../models/Cart.js";
 
 //********** POST /auth/register **********
 
@@ -17,7 +17,7 @@ export const register = async (req, res) => {
   //input validation is made by zod
 
   // check if the user already exists in the database
-  const existingUser = await User.exists({ email });
+  const existingUser = await User.findOne({ where: { email: email } });
 
   if (existingUser) {
     throw new Error("User already exists", { cause: 409 });
@@ -28,33 +28,15 @@ export const register = async (req, res) => {
   const hashedPassword = await bcrypt.hash(password, salt);
 
   // create a new user
-  // const user = await User.create({
-  //   email: email,
-  //   password: hashedPassword,
-  // });
-
-  // console.log("user", user);
-
-  // create a new user instance (generates _id without saving)
-  let user = new User({
+  const user = await User.create({
     email,
     password: hashedPassword,
   });
 
-  // create a cart linked to the user's future _id
-  const cart = await Cart.create({ userId: user._id, products: [] });
+  await Cart.create({ userId: user.id });
 
-  // assign the cart and persist the user
-  user.cartId = cart._id;
-  user = await user.save();
-
-  // convert the user document to an object to be able to delete the password property
-  const newUser = user.toObject();
-
-  // delete the password from the user object before sending the response back to the client
-  delete newUser.password;
-
-  console.log("newUser", newUser);
+  // find the user but with password excluded by its model default scope
+  const newUser = await User.findByPk(user.id);
 
   res.json(newUser);
 };
