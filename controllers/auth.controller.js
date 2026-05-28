@@ -8,6 +8,9 @@ import nodemailer from "nodemailer";
 import crypto from "crypto";
 import mongoose from "mongoose";
 import Address from "../models/Address.js";
+import { Resend } from "resend";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 //********** POST /auth/register **********
 
@@ -46,10 +49,17 @@ export const register = async (req, res) => {
 export const login = async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await User.findOne({ email })
-    .select("+password")
-    .populate("addresses")
-    .populate("defaultAddress");
+  // include the password in the query result by using the withPassword scope defined in the User model, and also populate addresses and defaultAddress
+  const user = await User.scope("withPassword").findOne({
+    where: { email },
+    include: [
+      { model: Address, as: "addresses" },
+      {
+        model: Address,
+        as: "defaultAddress",
+      },
+    ],
+  });
 
   if (!user) {
     throw new Error("Invalid Credentials", { cause: 400 });
@@ -64,7 +74,7 @@ export const login = async (req, res) => {
 
   // define the payload
   const payload = {
-    id: user._id,
+    id: user.id,
     email: user.email,
   };
 
@@ -73,12 +83,9 @@ export const login = async (req, res) => {
     expiresIn: process.env.JWT_EXPIRES_IN + "d",
   });
 
-  // convert the user document to an object to be able to delete the password property
-  const userDoc = user.toObject();
-
-  // delete the password from the user object before sending the response back to the client
+  //get a plain object instead of a sequelize document, and delete the password property from the user object before sending the response back to the client
+  const userDoc = user.toJSON();
   delete userDoc.password;
-
   //store the token in a cookie and set this cookie in the response header
   res.cookie("token", token, {
     httpOnly: true, //The cookie can’t be accessed by JavaScript (for security).
@@ -133,49 +140,24 @@ export const sendMail = async (req, res) => {
   const token = crypto.randomBytes(40).toString("hex");
 
   console.log("token", token);
-  const user = await User.findOne({ email });
+  const user = await User.findOne({ where: { email } });
 
   if (!user) {
-    throw new Error("User with the email address not found", { cause: 404 });
+    throw new Error("User Not Found", { cause: 404 });
   }
 
   user.resetToken = token;
   user.resetTokenExpiration = new Date(Date.now() + 3600000); //3600000ms=3600s=60m=1h
   await user.save();
 
-  // !api key should have full access in sendgrid
-  // sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-  // sgMail.setDataResidency("eu");
-  // uncomment the above line if you are sending mail using a regional EU subuser
-
-  const baseUrl = req.protocol + "://" + req.get("host");
-
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    port: 587,
-    auth: {
-      user: process.env.GMAIL_EMAIL,
-      pass: process.env.GMAIL_APP_PASSWORD,
-    },
-    tls: {
-      rejectUnauthorized: false,
-    },
+  await resend.emails.send({
+    from: "Bon Marché<noreply@dev-with-arnaud.work>", // sender (display only)
+    to: user.email, // recipient
+    replyTo: email,
+    subject: "Bon Marché - Password reset request",
+    html: `<p>Reset Your Password: <a href="${process.env.FRONTEND_BASE_URL}/reset-password/${token}"><strong>Click Here</strong></a></p>`,
   });
 
-  const msg = {
-    from: process.env.GMAIL_EMAIL, // Change to your recipient
-
-    to: user.email,
-
-    // cc: user.email,
-    subject: "Fullstack E-commerce - Password reset request",
-
-    html: `<p>Reset Your Password: <a href="${process.env.FRONTEND_BASE_URL}/reset-password/${token}"><strong>Click Here</strong></a></p>`, //html body
-  };
-
-  // await sgMail.send(msg);
-
-  await transporter.sendMail(msg);
   res
     .status(200)
     .json({ message: "Email for resetting password sent successfully" });
@@ -186,9 +168,12 @@ export const getResetPassword = async (req, res) => {
   const { token } = req.params;
 
   // ensure password reset page can be called only within the expiration time of the token
+
   const user = await User.findOne({
-    resetToken: token,
-    resetTokenExpiration: { $gt: new Date() },
+    where: {
+      resetToken: token,
+      resetTokenExpiration: { [Op.gt]: new Date() }, //check if the resetTokenExpiration date is greater than the current date, which means the token is still valid (not expired)
+    },
   });
 
   if (!user) {
@@ -207,8 +192,10 @@ export const resetPassword = async (req, res) => {
   const { password } = req.body;
 
   const user = await User.findOne({
-    resetToken: token,
-    resetTokenExpiration: { $gt: new Date() },
+    where: {
+      resetToken: token,
+      resetTokenExpiration: { $gt: new Date() },
+    },
   });
 
   // only reset the password if the token is valid
@@ -222,10 +209,16 @@ export const resetPassword = async (req, res) => {
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(password, salt);
 
-  user.password = hashedPassword;
+  /*  user.password = hashedPassword;
   user.resetToken = null;
   user.resetTokenExpiration = null;
-  await user.save();
+  await user.save(); both works fine */
+
+  await user.update({
+    password: hashedPassword,
+    resetToken: null,
+    resetTokenExpiration: null,
+  });
 
   res.status(201).json({ message: "Password reset successfully" });
 };
@@ -236,7 +229,7 @@ export const resetPassword = async (req, res) => {
 //********** Put /auth/profile **********
 
 export const updateProfile = async (req, res) => {
-  const userId = req.user._id;
+  const userId = req.user.id;
 
   const {
     label,
