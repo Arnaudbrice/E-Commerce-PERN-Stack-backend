@@ -35,12 +35,13 @@ const User = sequelize.define("User", {
     type: DataTypes.INTEGER,
     allowNull: true, // This field can be null if the user hasn't set a default address
     references: {
-      model: "Addresses",
+      model: "Addresses", //table name(pluralized and capitalized by default by Sequelize)
       key: "id",
     },
     onDelete: "SET NULL", // If the referenced address is deleted, set defaultAddressId to null
   },
   // way to exclude password from the response when we fetch user data (alternativ to mongoose select:false)
+  // the default scope will correctly exclude the password from all findByPk, findOne, findAll calls — without needing raw: true or manual delete user.password.
   defaultScope: {
     attributes: { exclude: ["password"] }, //take all excluding password
   },
