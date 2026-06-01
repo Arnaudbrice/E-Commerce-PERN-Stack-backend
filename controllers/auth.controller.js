@@ -248,32 +248,39 @@ export const updateProfile = async (req, res) => {
   console.log("imageUrl", imageUrl);
 
   //  Get the user document (with addresses array)
-  let user = await User.findById(userId)
-    .populate("addresses")
-    .populate("defaultAddress");
+
+  const queriedUser = await User.findByPk(userId, {
+    include: [
+      { model: Address, as: "addresses" },
+      { model: Address, as: "defaultAddress" },
+    ],
+  });
 
   //1- try to update the existing home address if the label is "Home" and if the user already has a home address, otherwise create a new address
 
-  // !NOTE:$ allows US to update the fields of just that matched address.
-  // Find the Address document for the user with label "Home" among user's addresses
-  const address = await Address.findOne({
-    _id: { $in: user.addresses },
-    label: "Home",
+  // Find the Address of the user with label "Home" among user's addresses
+
+  const homeAddress = await Address.findOne({
+    where: {
+      userId,
+      label: "Home",
+    },
   });
   // Update or create the address
-  if (address) {
-    address.firstName = firstName;
-    address.lastName = lastName;
-    address.companyName = companyName;
-    address.phone = phone;
-    address.streetAddress = streetAddress;
-    address.city = city;
-    address.state = state;
-    address.zipCode = zipCode;
-    address.country = country;
-    await address.save();
+  if (homeAddress) {
+    //if the user already has a home address, update it
+    homeAddress.firstName = firstName;
+    homeAddress.lastName = lastName;
+    homeAddress.companyName = companyName;
+    homeAddress.phone = phone;
+    homeAddress.streetAddress = streetAddress;
+    homeAddress.city = city;
+    homeAddress.state = state;
+    homeAddress.zipCode = zipCode;
+    homeAddress.country = country;
+    await homeAddress.save();
   } else {
-    // If not found, create a new Address and push its _id to the user addresses array, and set it as the default address
+    // If not found, create a new Address
     const newAddress = await Address.create({
       label,
       firstName,
@@ -285,37 +292,39 @@ export const updateProfile = async (req, res) => {
       state,
       zipCode,
       country,
+      userId,
     });
 
-    user.addresses.push(newAddress._id);
-    user.defaultAddress = newAddress._id; // Set the new address as the default address
-    await user.save();
+    if (!queriedUser.defaultAddressId) {
+      // Set the new address as the default address of the user
+      await queriedUser.update(
+        { defaultAddressId: newAddress.id },
+        { where: { id: userId } },
+      );
+    }
   }
 
   // Update avatar AFTER address logic (for both cases)
   const updateData = {};
   if (imageUrl) {
-    updateData.userAvatar = imageUrl;
+    updateData.userAvatar = imageUrl; //updateData={ userAvatar: imageUrl}
   }
-  user = await User.findByIdAndUpdate(
-    userId,
-    {
-      // $set: { userAvatar: imageUrl },
-      $set: updateData,
-    },
-    { new: true, runValidators: true },
-  )
-    .populate("addresses")
-    .populate("defaultAddress")
-    .lean(); //to get a plain object instead of a mongoose document, so that we can delete the password property from the user object before sending the response back to the client
+
+  // In Sequelize, we don't need to re-fetch after instance.update() — it mutates the instance in memory automatically. That's the key difference from Mongoose.
+  await queriedUser.update({ userAvatar: imageUrl }); //the update instance method mutates and returns the same sequelize instance "user" that has been created using findbyPk, so user is returned without password
+
+  // Re-fetch with associations (password excluded because of the default scope defined in the User model)
+  const user = await User.findByPk(userId, {
+    include: [
+      { model: Address, as: "addresses" },
+      { model: Address, as: "defaultAddress" },
+    ],
+  });
+
   if (!user) {
     // user not found
     throw new Error("User Not Found", { cause: 404 });
   }
-
-  // remove password
-  // const userWithoutPassword = user.toObject();
-  delete user.password;
 
   res.status(200).json({ user });
 };

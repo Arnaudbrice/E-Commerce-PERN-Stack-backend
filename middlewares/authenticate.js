@@ -15,10 +15,7 @@ const authenticate = async (req, res, next) => {
   const payload = jwt.verify(token, process.env.JWT_SECRET);
 
   console.log("payload", payload);
-  const user = await User.findByPk(payload.id, {
-    raw: true, //return plain json
-    plain: true, //Take it out of the array wrapper (returns {} instead of [{}]), because findById of findOne returns a single object or null by default
-  });
+  const user = await User.findByPk(payload.id); //no password — default scope applied
   if (!user) {
     throw new Error("User not found", { cause: 401 });
   }
