@@ -1,5 +1,6 @@
 import User from "../models/index.js";
 import Cart from "../models/index.js";
+import { Op } from "sequelize";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import sgMail from "@sendgrid/mail";
@@ -331,38 +332,39 @@ export const updateProfile = async (req, res) => {
 
 //********** POST /auth/shippingAddress **********
 export const addShippingAddress = async (req, res) => {
-  const userId = req.user._id;
+  const userId = req.user.id;
 
   const { firstName, lastName, streetAddress, zipCode, city, state, country } =
     req.body;
 
   // check if the user already added this address as a shipping address to prevent duplicates (based on the firstName, lastName, streetAddress, zipCode, city, state and  country )
 
-  const currentUser = await User.findById(userId).select("addresses").lean();
+  const currentUser = await User.findByPk(userId);
+
   if (!currentUser) {
     throw new Error("User Not Found", { cause: 404 });
   }
 
-  // Case-insensitive duplicate check
-  const esc = (v = "") => String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // Escape special characters for regex matching
-
   const existingAddress = await Address.findOne({
-    _id: { $in: currentUser.addresses },
-    firstName: { $regex: `^${esc(firstName)}$`, $options: "i" },
-    lastName: { $regex: `^${esc(lastName)}$`, $options: "i" },
-    streetAddress: { $regex: `^${esc(streetAddress)}$`, $options: "i" },
-    zipCode: { $regex: `^${esc(zipCode)}$`, $options: "i" },
-    city: { $regex: `^${esc(city)}$`, $options: "i" },
-    state: { $regex: `^${esc(state)}$`, $options: "i" },
-    country: { $regex: `^${esc(country)}$`, $options: "i" },
+    where: {
+      userId,
+      firstName: { [Op.iLike]: firstName }, //case-insensitive match for PostgreSQL
+      lastName: { [Op.iLike]: lastName },
+      streetAddress: { [Op.iLike]: streetAddress },
+      zipCode: { [Op.iLike]: zipCode },
+      city: { [Op.iLike]: city },
+      state: { [Op.iLike]: state },
+      country: { [Op.iLike]: country },
+    },
   });
 
   if (existingAddress) {
-    throw new Error("Shipping address already exists", { cause: 400 });
+    throw new Error("Shipping address already exists", { cause: 409 });
   }
 
-  //  Create a new document in the 'Address' collection
-  const newAddress = await Address.create({
+  //  Create  the new address and link it to the user by setting the userId foreign key in the Address model to the id of the user, and then re-fetch the user with the updated addresses to send it back in the response
+  await Address.create({
+    userId,
     firstName,
     lastName,
     streetAddress,
@@ -372,27 +374,21 @@ export const addShippingAddress = async (req, res) => {
     country,
   });
 
-  // Push ONLY the new address's ID into the user's addresses array
-  const updatedUser = await User.findByIdAndUpdate(
-    userId,
-    {
-      $push: { addresses: newAddress._id }, //push the new address _id to the user addresses array
-    },
-    {
-      new: true,
-      runValidators: true,
-    },
-  )
-    .populate("addresses") // Populate to return the full address objects
-    .populate("defaultAddress")
-    .lean();
-
+  // Re-fetch user with his associated updated addresses and defaultAddress (defaultAdress and addresses populated because of the include option in the findByPk method)
+  const updatedUser = await User.findByPk(userId, {
+    include: [
+      { model: Address, as: "addresses" }, //user has many addresses
+      { model: Address, as: "defaultAddress" }, //user belongs to one default address
+    ],
+  });
+  /*    Load associations on demand (separate queries)
+await user.getAddresses();       // from User.hasMany(Address, { as: "addresses" })
+await user.getDefaultAddress();  // from User.belongsTo(Address, { as: "defaultAddress" })
+ */
   if (!updatedUser) {
     throw new Error("User Not Found", { cause: 404 });
   }
-
-  delete updatedUser.password;
-
+  // no need to delete the password because sequelize uses the default scope to exclude password from the response when we fetch user data
   res.status(200).json({ user: updatedUser });
 };
 
@@ -404,17 +400,23 @@ export const addShippingAddress = async (req, res) => {
 export const getMe = async (req, res) => {
   // from the authenticate middleware
   // we have access to the user object in the request object
-  const { _id } = req.user;
+  const { id } = req.user;
 
-  // populate addresses and defaultAddress
-  const user = await User.findById(_id)
-    .populate("addresses")
-    .populate("defaultAddress")
-    .lean();
+  // queries User with his associated addresses and defaultAddress populated
+  const user = await User.findbyPk(id, {
+    include: [
+      { model: Address, as: "Addresses" },
+      {
+        model: Address,
+        as: "defaultAddress",
+      },
+    ],
+  });
   if (!user) {
     throw new Error("User Not Found", { cause: 404 });
   }
 
   console.log("user in getMe", user);
+  // password is auto-excluded by defaultScope
   res.json(user);
 };

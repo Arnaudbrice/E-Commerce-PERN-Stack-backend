@@ -1,6 +1,9 @@
-import Cart from "../models/Cart.js";
-import Product from "../models/Product.js";
-import User from "../models/User.js";
+import Cart from "../models/index.js";
+import CartItem from "../models/index.js";
+import Product from "../models/index.js";
+import { CATEGORIES } from "../models/Product.js";
+import User from "../models/index.js";
+import UserFavorites from "../models/index.js";
 
 import chalk from "chalk";
 
@@ -9,13 +12,16 @@ import path, { sep } from "path";
 import PDFDocument from "pdfkit";
 import Stripe from "stripe";
 import { fileURLToPath } from "url";
-import Order from "../models/Order.js";
-import Review from "../models/Review.js";
+import Order from "../models/index.js";
+import OrderItem from "../models/index.js";
+
+import Review from "../models/index.js";
 import mongoose from "mongoose";
 import { getPagination } from "../utils/pagination.js";
 
 import sanitizeHtml from "sanitize-html";
 import nodemailer from "nodemailer";
+import { Op } from "sequelize";
 
 //! return a cross-platform valid absolute path to the current file (import.meta.url returns full url of the current file)-> /Users/Arnaud/Desktop/wdg23/Project-Mern-stack-e-commerce/E-Commerce-MERN-stack-backend/controllers/user.controller.js
 const __filename = fileURLToPath(import.meta.url);
@@ -32,7 +38,7 @@ const itemPerPage = 10; //display 10 products per page
 
 //********** POST /users/products **********
 export const createProduct = async (req, res) => {
-  const userId = req.user._id;
+  const userId = req.user.id;
   /*    console.log("hello");
   console.log("req", req.body);
   console.log("req file", req.file); */
@@ -70,24 +76,32 @@ export const getProducts = async (req, res) => {
   const query =
     search ?
       {
-        $or: [
-          { title: { $regex: escapeRegex(search), $options: "i" } },
-          { description: { $regex: escapeRegex(search), $options: "i" } },
+        [Op.or]: [
+          { title: { [Op.iLike]: `%${search}%` } }, //substring case-insensitive matching
+          { description: { [Op.iLike]: `%${search}%` } }, //substring case-insensitive matching
         ],
       }
-    : {};
+    : {}; // find all if no match found
 
   const total = await Product.countDocuments(query);
   const numberOfPages = Math.ceil(total / itemPerPage);
   const paginationArray = getPagination(page, numberOfPages, 5);
 
   // Get ALL matching products
-  const products = await Product.find(query);
+  // const products = await Product.find(query);
+
+  const products = await Product.findAll({
+    where: query,
+    order: [["createdAt", "DESC"]], // sort by createdAt descending (optional)
+  });
 
   // Get PAGINATED results
-  const productsPerPage = await Product.find(query)
-    .skip((page - 1) * itemPerPage)
-    .limit(itemPerPage);
+  const productsPerPage = await Product.findAll({
+    where: query,
+    order: [["createdAt", "DESC"]],
+    offset: (page - 1) * itemPerPage, //alternative to mongoose skip
+    limit: itemPerPage,
+  });
 
   res.json({
     products,
@@ -101,7 +115,10 @@ export const getProducts = async (req, res) => {
 //********** GET /users/products/:id **********
 export const getProduct = async (req, res) => {
   const { id } = req.params;
-  const product = await Product.findById(id).populate("reviews");
+
+  const product = await Product.findByPk(id, {
+    include: [{ model: Review, as: "reviews" }],
+  });
   if (!product) {
     throw new Error("Product not found", { cause: 404 });
   }
@@ -113,17 +130,17 @@ export const getProduct = async (req, res) => {
 export const deleteProduct = async (req, res) => {
   const { id } = req.params;
 
-  const deletedProduct = await Product.findByIdAndDelete(id); //new:true not needed here, since the deleted product will be returned
+  const product = await Product.findByPk(id);
 
-  if (!deletedProduct) {
+  if (!product) {
     throw new Error("Product not found", { cause: 404 });
   }
 
-  // Delete all reviews associated with the deleted product
-  await Review.deleteMany({ product: deletedProduct._id });
+  await Product.destroy(); //through delete Cascade in the Product model, it will automatically delete all associated reviews of that product when the product is deleted, so we don't need to manually delete reviews (this return void)
 
   // res.status(204).end();//204 means no content to be send back (nice for delete or update)
-  res.status(200).json({ deletedProduct });
+  // res.status(200).json({ deletedProduct });
+  res.status(200).json({ deletedProduct: product });
 };
 
 //********** PUT /users/products/:id **********
@@ -135,10 +152,6 @@ export const updateProduct = async (req, res) => {
   let update = { ...req.body };
   console.log("update", update);
 
-  /*  update.weight = parseFloat(update.weight);
-  update.price = parseFloat(update.price);
-     update.stock = parseInt(update.stock); */
-
   // get the secure url of the uploaded image from cloudinary storage (after successfully uploading the image to cloudinary storage)
   const imageUrl = req.file?.secure_url;
 
@@ -146,14 +159,16 @@ export const updateProduct = async (req, res) => {
     update.image = imageUrl;
   }
 
-  const updatedProduct = await Product.findByIdAndUpdate(id, update, {
-    new: true,
+  const [rowCount, updatedProducts] = await Product.update(update, {
+    where: { id },
+    returning: true,
   });
 
-  if (!updatedProduct) {
+  if (rowCount === 0) {
     throw new Error("Product not found", { cause: 404 });
   }
 
+  const updatedProduct = updatedProducts[0]; //updatedProducts is an array of the updated products, but we only update one product, so we take the first element of the array
   console.log("updatedProduct", updatedProduct);
 
   res.status(200).json(updatedProduct);

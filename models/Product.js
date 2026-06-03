@@ -1,7 +1,7 @@
 import { DataTypes } from "sequelize";
 import sequelize from "../db/index.js";
 
-const CATEGORIES = [
+export const CATEGORIES = [
   "Electronics",
   "Jewelry",
   "Men's Clothing",
@@ -55,10 +55,9 @@ const Product = sequelize.define(
       references: { model: "Users", key: "id" },
       onDelete: "CASCADE", //when user is deleted, delete all products of that user (optional, but makes sense in this case)
     },
-    orderId:{
+    orderId: {
       type: DataTypes.INTEGER,
-
-    }
+    },
   },
   {
     timestamps: true, // adds createdAt & updatedAt
