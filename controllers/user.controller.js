@@ -22,6 +22,7 @@ import { getPagination } from "../utils/pagination.js";
 import sanitizeHtml from "sanitize-html";
 import nodemailer from "nodemailer";
 import { Op } from "sequelize";
+import { ids } from "googleapis/build/src/apis/ids/index.js";
 
 //! return a cross-platform valid absolute path to the current file (import.meta.url returns full url of the current file)-> /Users/Arnaud/Desktop/wdg23/Project-Mern-stack-e-commerce/E-Commerce-MERN-stack-backend/controllers/user.controller.js
 const __filename = fileURLToPath(import.meta.url);
@@ -136,7 +137,7 @@ export const deleteProduct = async (req, res) => {
     throw new Error("Product not found", { cause: 404 });
   }
 
-  await Product.destroy(); //through delete Cascade in the Product model, it will automatically delete all associated reviews of that product when the product is deleted, so we don't need to manually delete reviews (this return void)
+  await product.destroy(); //through delete Cascade in the Product model, it will automatically delete all associated reviews of that product when the product is deleted, so we don't need to manually delete reviews (this return void)
 
   // res.status(204).end();//204 means no content to be send back (nice for delete or update)
   // res.status(200).json({ deletedProduct });
@@ -180,34 +181,36 @@ export const updateProductStock = async (req, res) => {
   const { id } = req.params;
 
   const quantity = Number(req.body.quantity);
-  const userId = req.user._id;
+  const userId = req.user.id;
 
   // const product = await Product.findOne({ _id: id });
 
-  const product = await Product.findByIdAndUpdate(
+  /*  const product = await Product.findByIdAndUpdate(
     id,
     { $inc: { stock: -quantity } }, //! Use $inc to decrement 'stock' by 'quantity' and stock:quantity for incrementation
 
     { new: true, runValidators: true }, // {new: true} returns the updated document
-  );
-  if (!product) {
-    throw new Error("Product Not Found", { cause: 404 });
+  ); */
+
+  const product = await Product.findByPk(id);
+  if (!product) throw new Error("Product not found", { cause: 404 });
+
+  if (product.stock < quantity) {
+    throw new Error("Product stock is not enough", { cause: 400 });
   }
+  // best way to avoid race condition when multiple users try to update the stock of the same product at the same time is to use atomic operations provided by the database, such as $inc in MongoDB or increment/decrement in Sequelize
+  await product.decrement("stock", { by: quantity });
+  await product.reload(); // reload to get the instance with the updated value
 
   console.log(chalk.yellow("product after payment"), product);
-  // decrease stock
-  /* product.stock -= quantity;
-  await product.save(); */
-  res.status(200).json({ message: "Product Stock Updated", product }); //204 means no content to be send back (nice of delete and update)
-  /*   res.status(201).json({ message: "Product Stock Updated", product }); */
 
-  // res.redirect("/orders");
+  res.status(200).json({ message: "Product Stock Updated", product }); //204 means no content to be send back (nice for delete and update)
 };
 
 //********** handle rating **********
 //********** PUT /users/products/:id/rating **********
 export const updateProductRating = async (req, res) => {
-  const userId = req.user._id;
+  const userId = req.user.id;
   const { id } = req.params;
   const { rating, comment } = req.body;
   // let isRatingExists = false;
@@ -217,108 +220,75 @@ export const updateProductRating = async (req, res) => {
 
   console.log("id", id);
   console.log("userId", userId);
-
-  /*
-MongoDB's dot notation allows querying fields within array subdocuments. For example, `{ userId: userId, "products.productId": id }` retrieves an order where any product in the `products` array has `productId` equal to `id`. The `$elemMatch` operator is only necessary when applying multiple conditions to the same array element, such as requiring both `productId === id` and `quantity > 1`. */
-  const existOrderForUser = await Order.findOne({
-    userId: userId,
-    "products.productId": id,
+  const hasPurchased = await Order.findOne({
+    where: { userId: userId },
+    include: [
+      {
+        model: OrderItem,
+        as: "orderItems",
+        where: { productId: id },
+        required: true, // INNER JOIN — only matches orders with this product
+      },
+    ],
   });
-  if (!existOrderForUser) {
+
+  if (!hasPurchased) {
     throw new Error(
       "No Order Found, You Can Only Rate Products That You Have Purchased",
       { cause: 404 },
     );
   }
 
-  const product = await Product.findById(id).populate("reviews");
+  // const product = await Product.findById(id).populate("reviews");
 
-  if (!product) {
-    throw new Error("Product not found", { cause: 404 });
-  }
+  const product = await Product.findByPk(id, {
+    include: [{ model: Review, as: "reviews" }],
+  });
+  if (!product) throw new Error("Product not found", { cause: 404 });
 
-  const review = {
-    product: product._id,
-    user: userId, // Passing a string, Mongoose will cast it to ObjectId
-    rating,
-    comment,
-  };
+  // update the review if the user has already reviewed the product, otherwise create a new review
+
+  // Find the review (sequelize instance) in the existing array of reviews for the product that matches the userId
   const existingReview = product.reviews.find(
-    (review) => review.user.toString() === userId.toString(),
+    (review) => review.userId === userId,
   );
   console.log("existingReview------------------", existingReview);
 
   if (existingReview) {
-    /*  existingReview.rating = rating;
-    existingReview.comment = comment; */
-    // !The $[review] is a placeholder for the specific array element that matches the condition in arrayFilters.
-
-    console.log("existingReview", existingReview);
-
-    /*  await Product.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          "reviews.$[review].rating": rating,
-          "reviews.$[review].comment": comment,
-        },
-      },
-      {
-        arrayFilters: [{ "review.user": userObjectId }],
-      }
-    ); */
-    /*  await Review.findOneAndUpdate(
-      { product: productObjectId, user: userObjectId },
-      { $set: { rating, comment } }
-    ); */
-
-    const updatedReview = await Review.findByIdAndUpdate(
-      existingReview._id,
-      {
-        $set: { rating, comment },
-      },
-      { new: true },
-    );
-
-    for (const review of product.reviews) {
-      if (review._id.toString() === existingReview._id.toString()) {
-        // object mutation
-        review.rating = updatedReview.rating;
-        review.comment = updatedReview.comment;
-      }
-    }
-
-    // isRatingExists = true;
+    await existingReview.update({ rating, comment }); //update and mutate the existing review instance in the product.reviews array
   } else {
-    const newReview = await Review.create(review);
-
-    console.log("newReview", newReview);
-
-    // update the populated product object with the new review
-    product.reviews.push(newReview);
-    /* product.reviews.push(newReview);
-    await product.save(); */
+    const review = {
+      productId: product.id,
+      userId: userId,
+      rating,
+      comment,
+    };
+    await Review.create(review);
   }
 
-  console.log(chalk.magenta("product.reviews", product.reviews));
-  // recalculate average rating of the populated product object
-  product.averageRating =
-    Math.round(
-      parseFloat(
-        product?.reviews?.reduce(
-          (accumulator, currentReview) => accumulator + currentReview.rating,
-          0,
-        ) / product.reviews.length,
-      ).toFixed(1) * 2,
-    ) / 2;
-  console.log("product.averageRating", product.averageRating);
+  // calculate the average of the rating
 
-  const updatedProduct = await product.save();
+  const result = await Review.findOne({
+    where: { productId: id },
+    attributes: [fn("AVG", col("rating")), "averageRating"],
+    raw: true, // return the raw result without the metadata, so that we can get the averageRating directly from result.averageRating instead of result.dataValues.averageRating (Always use raw: true with aggregate queries (AVG, SUM, COUNT, MAX...))
+  });
+
+  const avg = Math.round(parseFloat(result.averageRating) * 2) / 2; // round to nearest 0.5 (Half-star rating system (⭐½))
+  const [rowCount, updatedProducts] = await Product.update(
+    { averageRating: avg },
+    { where: { id } },
+  );
+
+  if (rowCount === 0) {
+    throw new Error("Product not found", { cause: 404 });
+  }
+
+  const updatedProduct = updatedProducts[0];
 
   console.log(chalk.red("updatedProduct", updatedProduct));
 
   res.status(200).json(updatedProduct);
-  // res.status(200).json({ updatedProduct, isRatingExists });
 };
 
 /****************************************
