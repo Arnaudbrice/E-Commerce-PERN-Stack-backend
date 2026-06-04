@@ -7,7 +7,7 @@ const Review = sequelize.define(
     productId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      references: { model: "Products", key: "id" },
+      references: { model: "Products", key: "id" }, //key:"id" ->the column in the Products table being referenced (the PK)
       onDelete: "CASCADE", //when product is deleted, delete all reviews of that product
     },
     userId: {
