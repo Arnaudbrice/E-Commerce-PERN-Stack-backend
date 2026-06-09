@@ -24,6 +24,8 @@ import nodemailer from "nodemailer";
 import { Op } from "sequelize";
 import { ids } from "googleapis/build/src/apis/ids/index.js";
 
+import { escapeRegex } from "../utils/regexEscaper.js";
+
 //! return a cross-platform valid absolute path to the current file (import.meta.url returns full url of the current file)-> /Users/Arnaud/Desktop/wdg23/Project-Mern-stack-e-commerce/E-Commerce-MERN-stack-backend/controllers/user.controller.js
 const __filename = fileURLToPath(import.meta.url);
 // return the directory name of the absolute path to the current file->/Users/Arnaud/Desktop/wdg23/Project-Mern-stack-e-commerce/E-Commerce-MERN-stack-backend/controllers
@@ -63,13 +65,6 @@ export const createProduct = async (req, res) => {
 };
 
 //********** GET /users/products **********
-// to prevent regex injection attacks
-const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/* escapeRegex("price.*");        // → "price\.\*"
-escapeRegex("test?");          // → "test\?"
-escapeRegex("$100");           // → "\$100"
-escapeRegex("(special)");      // → "\(special\)" */
-
 export const getProducts = async (req, res) => {
   const page = Number(req.query.page || 1);
   const search = req.query.search?.trim();
@@ -298,76 +293,70 @@ export const updateProductRating = async (req, res) => {
 //********** GET users/admin/orders **********
 export const getAllOrders = async (req, res) => {
   // Optionally: Add admin authentication/authorization check here
+  // users/admin/orders?page=1&search=something
   const currentPageNumber = Number(req.query.page) || 1; //get page number
 
   const search = req.query.search?.trim(); // get search term
 
   console.log("search", search);
-  let query = {};
+  let where = {};
 
   if (search) {
-    // Create a case-insensitive regex for the search term, escaping special characters to prevent regex injection attacks (if search = "price.*", escapeRegex(search) → "price\\.\\*", and new RegExp(...,"i") → /price\.\*/i (matches the literal text price.*, case-insensitively).)
-    const rx = new RegExp(escapeRegex(search), "i");
+    // Create a case-insensitive regex for the search term, escaping special characters to prevent regex injection attacks (not necessary in sequelize)
 
-    // 1) Find users matching email / name/companyName
-    const matchedUsers = await User.find({
-      $or: [
-        { email: rx },
-        { "defaultAddress.firstName": rx },
-        { "defaultAddress.lastName": rx },
-        { "defaultAddress.companyName": rx },
-      ],
-    }).select("_id");
+    const orCondition = [];
+    // 1) Search users by email / name/companyName/id
+    // search by orderId
+    if (!Number.isNaN(Number(search))) {
+      // if search can be converted to a number, add id search condition (search by orderId)
+      orCondition.push({ id: Number(search) }); //Be careful:dot notation will add an "and" condition (AND search by orderId) to the existing or condition[ WHERE (email ILIKE '%search%' OR firstName ILIKE '%search%' OR lastName ILIKE '%search%' OR companyName ILIKE '%search%') AND id = 123]
+    }
 
-    const matchedUserIds = matchedUsers.map((u) => u._id);
-
-    // 2) Search orders by orderId string OR matched userIds OR shippingAddress fields
-    query = {
-      $or: [
-        {
-          $expr: {
-            $regexMatch: {
-              input: { $toString: "$_id" },
-              regex: escapeRegex(search),
-              options: "i",
-            },
-          },
-        },
-        { userId: { $in: matchedUserIds } },
-        { "shippingAddress.companyName": rx },
-        { "shippingAddress.firstName": rx },
-        { "shippingAddress.lastName": rx },
-      ],
+    orCondition.push(
+      { "$user.email$": { [Op.iLike]: `%${search}%` } }, //access a col from a joined table using the $ syntax with the alias of the joined table (user) and the column name (email)
+      { "$user.defaultAddress.firstName$": { [Op.iLike]: `%${search}%` } }, //access a col from a joined table using the $ syntax with the alias of the joined table (defaultAddress) and the column name (firstName)
+      { "$user.defaultAddress.lastName$": { [Op.iLike]: `%${search}%` } },
+      { "$user.defaultAddress.companyName$": { [Op.iLike]: `%${search}%` } },
+    );
+    where = {
+      [Op.or]: orCondition,
     };
   }
-  console.log("query", query);
-  const numberOfOrders = await Order.countDocuments(query);
+  const count = await Order.count({
+    where,
+    include: [
+      {
+        model: User,
+        as: "user",
+        include: [{ model: Address, as: "defaultAddress" }],
+      },
+    ],
+    distinct: true,
+  });
 
   const itemPerPage = 10;
-  const numberOfPages = Math.ceil(numberOfOrders / itemPerPage);
+  const numberOfPages = Math.ceil(count / itemPerPage);
 
   const paginationArray = getPagination(currentPageNumber, numberOfPages, 5);
 
-  /*   const ordersForCurrentPage = await Order.find()
-    .populate("products.productId")
-    .populate("userId", "email defaultAddress") // Optionally populate user info
-    .skip((currentPageNumber - 1) * itemPerPage)
-    .limit(itemPerPage);
- */
-
-  const ordersForCurrentPage = await Order.find(query)
-    .populate("products.productId")
-    .populate({
-      path: "userId",
-      select: "email defaultAddress",
-      populate: { path: "defaultAddress" },
-    }) // Optionally populate user info
-    .sort({ createdAt: -1 }) // Sort by createdAt descending
-    .skip((currentPageNumber - 1) * itemPerPage)
-    .limit(itemPerPage);
+  const ordersForCurrentPage = await Order.findAll({
+    where,
+    include: [
+      { model: OrderItem, as: "orderItems" },
+      {
+        model: User,
+        as: "user",
+        include: [{ model: Address, as: "defaultAddress" }],
+      },
+    ],
+    order: [["createdAt", "DESC"]], // Sort by createdAt descending
+    offset: (currentPageNumber - 1) * itemPerPage, //alternative to mongoose skip
+    limit: itemPerPage,
+    distinct: true, // Ensure correct count when including associations (prevents duplicate rows from inflating the count)
+  });
 
   console.log("ordersForCurrentPage", ordersForCurrentPage);
-  res.status(200).json({
+  return res.status(200).json({
     orders: ordersForCurrentPage,
     paginationArray,
     currentPageNumber,
@@ -377,78 +366,99 @@ export const getAllOrders = async (req, res) => {
 
 //********** GET /users/orders **********
 export const getOrders = async (req, res) => {
-  const userId = req.user._id;
+  const userId = req.user.id;
 
   const currentPageNumber = Number(req.query.page) || 1; //get page number
   const search = req.query.search?.trim(); //  Get search term
 
-  // Build search query
-  const searchQuery =
-    search ?
+  let where = {};
+
+  if (search) {
+    // Create a case-insensitive regex for the search term, escaping special characters to prevent regex injection attacks (not necessary in sequelize)
+
+    const orCondition = [];
+    // 1) Search users by email or  name or companyName or orderId
+
+    // search by orderId
+    if (!Number.isNaN(Number(search))) {
+      // if search can be converted to a number, add id search condition (search by orderId)
+      orCondition.push({ id: Number(search) }); //Be careful:dot notation will add an "and" condition (AND search by orderId) to the existing or condition[ WHERE (email ILIKE '%search%' OR firstName ILIKE '%search%' OR lastName ILIKE '%search%' OR companyName ILIKE '%search%') AND id = 123]
+    }
+
+    orCondition.push(
+      { "$user.email$": { [Op.iLike]: `%${search}%` } }, //access a col from a joined table using the $ syntax with the alias of the joined table (user) and the column name (email)
+      { "$user.defaultAddress.firstName$": { [Op.iLike]: `%${search}%` } }, //access a col from a joined table using the $ syntax with the alias of the joined table (defaultAddress) and the column name (firstName)
+      { "$user.defaultAddress.lastName$": { [Op.iLike]: `%${search}%` } },
+      { "$user.defaultAddress.companyName$": { [Op.iLike]: `%${search}%` } },
+    );
+    where = {
+      "$user.id$": userId, // Ensure we only search within the orders of the authenticated user
+      [Op.or]: orCondition,
+    };
+  }
+
+  const count = await Order.count({
+    where,
+    include: [
       {
-        $or: [
-          {
-            $expr: {
-              $regexMatch: {
-                input: { $toString: "$_id" },
-                regex: escapeRegex(search),
-                options: "i",
-              },
-            },
-          },
-          {
-            "products.title": {
-              $regex: escapeRegex(search),
-              $options: "i",
-            },
-          },
-        ],
-      }
-    : {};
-
-  // Combine user ID filter with search
-  const query = {
-    userId,
-    ...searchQuery,
-  };
-
-  // counts the number of orders for the current user
-  const numberOfOrders = await Order.countDocuments(query);
-
-  console.log("numberOfOrders", numberOfOrders);
+        model: User,
+        as: "user",
+        include: [{ model: Address, as: "defaultAddress" }],
+      },
+    ],
+    distinct: true,
+  });
 
   const itemPerPage = 10;
-  const numberOfPages = Math.ceil(numberOfOrders / itemPerPage);
+  const numberOfPages = Math.ceil(count / itemPerPage);
 
   const paginationArray = getPagination(currentPageNumber, numberOfPages, 5);
-  console.log("paginationArray", paginationArray);
 
-  const ordersForCurrentPage = await Order.find(query)
-    .populate("products.productId")
-    .sort({ createdAt: -1 }) // Sort by createdAt descending
-    .skip((currentPageNumber - 1) * itemPerPage)
-    .limit(itemPerPage);
+  const ordersForCurrentPage = await Order.findAll({
+    where,
+    include: [
+      {
+        model: OrderItem,
+        as: "orderItems",
+        include: [{ model: Product, as: "product" }], //allow me to do ordersForCurrentPage[0].orderItems[0].product
+      }, // include product details in orderItems to display in the order history page
+      {
+        model: User,
+        as: "user", //ordersForCurrentPage[0].user
+        include: [{ model: Address, as: "defaultAddress" }], //ordersForCurrentPage[0].user.defaultAddress
+      },
+    ],
+    order: [["createdAt", "DESC"]], // Sort by createdAt descending
+    offset: (currentPageNumber - 1) * itemPerPage, //alternative to mongoose skip
+    limit: itemPerPage,
+    distinct: true, // Ensure correct count when including associations (prevents duplicate rows from inflating the count)
+  });
 
-  /* const orders = await Order.find({ userId: userId }).populate(
-    "products.productId",
-  ); */ //!populate every productId in the products array
+  console.log("ordersForCurrentPage", ordersForCurrentPage);
 
   const ordersProductsForCurrentPage = ordersForCurrentPage.map((order) => {
     return {
-      _id: order._id,
-      products: order.products,
+      id: order.id,
+      products: order.orderItems, //! orderItems already include the product details due to the nested include of Product in OrderItem, so we can directly return orderItems as products for the frontend to display in the order history page without needing to do additional mapping to extract product details
       status: order.status,
       createdAt: order.createdAt,
-      shippingAddress: order.shippingAddress,
       userId: order.userId,
       shippingCosts: order.shippingCosts,
+      // shippingAddress correctly composed
+      shippingAddress: {
+        firstName: order.firstName,
+        lastName: order.lastName,
+        companyName: order.companyName,
+        streetAddress: order.streetAddress,
+        zipCode: order.zipCode,
+        city: order.city,
+        state: order.state,
+        country: order.country,
+      },
     };
   });
 
-  // console.log("ordersProducts", ordersProducts);
-
-  res.json({
-    // ordersProducts,
+  return res.status(200).json({
     ordersProductsForCurrentPage,
     paginationArray,
     currentPageNumber,
@@ -462,15 +472,12 @@ export const updateOrderStatus = async (req, res) => {
   console.log("id", id);
   console.log("status", status);
 
-  const updatedOrder = await Order.findByIdAndUpdate(
-    id,
+  const [rowCount, updatedRecords] = await Order.update(
     { status },
-    { new: true, runValidators: true },
+    { where: { id: id }, returning: true },
   );
-
-  if (!updatedOrder) {
-    throw new Error("Order not found", { cause: 404 });
-  }
+  if (rowCount === 0) throw new Error("Order not found", { cause: 404 });
+  const updatedOrder = updatedRecords[0];
 
   res.status(200).json({
     message: "Order status updated successfully",
@@ -489,10 +496,10 @@ export const createOrder = async (req, res) => {
 
   /*   const userFound = await User.findOne({ _id: userId });
 
-  const cart = await Cart.findOne({ userId: userId });
-  userFound.cartId = cart._id;
-  await userFound.save();
-  console.log("userFound after populated cartId", userFound); */
+    const cart = await Cart.findOne({ userId: userId });
+    userFound.cartId = cart._id;
+    await userFound.save();
+    console.log("userFound after populated cartId", userFound); */
 
   const user = await User.findById(userId).populate("cartId");
 
@@ -506,9 +513,9 @@ export const createOrder = async (req, res) => {
   }
 
   /* if (!user || !user.cartId) {
-    throw new Error("User or cart not found", { cause: 404 });
-  }
- */
+      throw new Error("User or cart not found", { cause: 404 });
+    }
+   */
   // const cart = user.cartId;
 
   if (!cart.products || cart.products.length === 0) {
@@ -562,10 +569,10 @@ export const createOrder = async (req, res) => {
   console.log("order.products after stock update", order.products);
 
   /*    //!solution1: Refetch cart right before clearing to avoid stale __v
-  const freshCart = await Cart.findById(cart._id);
-  freshCart.products = [];
-  await freshCart.save();
- */
+    const freshCart = await Cart.findById(cart._id);
+    freshCart.products = [];
+    await freshCart.save();
+   */
   // !solution2: Use updateOne/findByIdAndUpdate instead of save() to avoid stale __v (Verwenden Sie updateOne/findByIdAndUpdate statt save(), um veraltete document version number __v zu vermeiden)
 
   // Clear user cart after successful order creation and product stock update
@@ -594,12 +601,12 @@ export const getOrderInvoice = async (req, res, next) => {
 
     // Prepare PDF config before streaming
     /*  const fontPathTitle = path.join(__dirname, "..", "font", "Outfit-Bold.ttf");
-    const fontPathText = path.join(
-      __dirname,
-      "..",
-      "font",
-      "Outfit-Regular.ttf"
-    ); */
+      const fontPathText = path.join(
+        __dirname,
+        "..",
+        "font",
+        "Outfit-Regular.ttf"
+      ); */
 
     //! pdf configuration (add content to the PDF)
     const fontPathTitle = path.join(process.cwd(), "font", "Outfit-Bold.ttf");
@@ -862,9 +869,9 @@ export const getFavoriteProducts = async (req, res) => {
   });
   /*   const favoriteProducts = await Product.find({ isFavorite: true });
 
-  const numberOfFavoriteProducts = favoriteProducts.length;
+    const numberOfFavoriteProducts = favoriteProducts.length;
 
-  res.json({ favoriteProducts, numberOfFavoriteProducts }); */
+    res.json({ favoriteProducts, numberOfFavoriteProducts }); */
 };
 
 /****************************************
@@ -874,10 +881,10 @@ export const getFavoriteProducts = async (req, res) => {
 export const getCartProducts = async (req, res) => {
   const userId = req.user._id;
   /* const cart = await Cart.findOne({ userId: userId })
-    .populate({
-      path: 'products.productId',
-      select: 'title price image' // Only populate title, price, and image fields of the product
-    }) */
+      .populate({
+        path: 'products.productId',
+        select: 'title price image' // Only populate title, price, and image fields of the product
+      }) */
 
   const cart = await Cart.findOne({ userId: userId }).populate(
     "products.productId",
