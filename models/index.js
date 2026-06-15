@@ -49,7 +49,7 @@ Cart.belongsTo(User, {
 // ── Cart ↔ CartItem (1:N)
 Cart.hasMany(CartItem, {
   foreignKey: "cartId",
-  as: "items",
+  as: "cartItems",
 });
 CartItem.belongsTo(Cart, {
   foreignKey: "cartId",
