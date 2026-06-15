@@ -109,7 +109,7 @@ userRouter
   .post(authenticate, createOrder);
 
 //  route for location detection
-userRouter.get("/location", getUserLocation);
+userRouter.post("/location", getUserLocation);
 
 userRouter
   .route("/orders/send-order-confirmation-mail")

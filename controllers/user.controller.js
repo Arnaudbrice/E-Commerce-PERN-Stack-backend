@@ -25,6 +25,7 @@ import { Op } from "sequelize";
 import { ids } from "googleapis/build/src/apis/ids/index.js";
 
 import { escapeRegex } from "../utils/regexEscaper.js";
+import { calculateShippingCost } from "../utils/shippingCost.js";
 
 //! return a cross-platform valid absolute path to the current file (import.meta.url returns full url of the current file)-> /Users/Arnaud/Desktop/wdg23/Project-Mern-stack-e-commerce/E-Commerce-MERN-stack-backend/controllers/user.controller.js
 const __filename = fileURLToPath(import.meta.url);
@@ -465,6 +466,7 @@ export const getOrders = async (req, res) => {
   });
 };
 
+//TODO: add a status to the order
 export const updateOrderStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -486,99 +488,76 @@ export const updateOrderStatus = async (req, res) => {
 };
 
 //********** POST /users/orders **********
+// create an order after stripe payment is successful in the frontend, and clear the user cart after order creation
 export const createOrder = async (req, res) => {
-  const userId = req.user._id;
+  const userId = req.user.id;
 
   console.log("userId in createOrder", userId);
-  const { shippingAddress, shippingCosts } = req.body;
+  const { shippingAddress } = req.body; //recalculate shipping cost in the backend to prevent malicious user from manipulating the shipping cost in the request body to get a lower shipping cost (never trust the client, always validate and recalculate important data in the backend)
 
-  // !note: after populating cartId, cartId becomes a Cart document that can be save using user.cartId.save()
-
-  /*   const userFound = await User.findOne({ _id: userId });
-
-    const cart = await Cart.findOne({ userId: userId });
-    userFound.cartId = cart._id;
-    await userFound.save();
-    console.log("userFound after populated cartId", userFound); */
-
-  const user = await User.findById(userId).populate("cartId");
-
-  let cart = user?.cartId;
-
-  if (!cart) {
-    cart = await Cart.findOne({ userId }); // fallback
-    if (!cart) {
-      throw new Error("User or cart not found", { cause: 404 });
-    }
-  }
-
-  /* if (!user || !user.cartId) {
-      throw new Error("User or cart not found", { cause: 404 });
-    }
-   */
-  // const cart = user.cartId;
-
-  if (!cart.products || cart.products.length === 0) {
-    throw new Error("Cart is empty, cannot create order", { cause: 400 });
-  }
-
-  const cartItems = cart.products.map((item) => {
-    return {
-      productId: item.productId,
-      image: item.image,
-      title: item.title,
-      description: item.description,
-      price: item.price,
-      quantity: item.quantity,
-    };
+  const cart = await Cart.findOne({
+    where: { userId: userId },
+    include: [{ model: CartItem, as: "cartItems" }],
   });
 
-  // create order
-  let order;
-  if (user.role === "admin") {
-    order = await Order.create({
-      userId: userId,
-      products: cartItems,
-      shippingAddress,
-      shippingCosts,
-      isAdminOrder: true, // by setting this flag, It will ignore the shippingAddress field firstName and lastName for admin orders
-    });
-  } else {
-    order = await Order.create({
-      userId: userId,
-      products: cartItems, // cartItems is a copy of the cart's products at order time
-      shippingAddress,
-      shippingCosts,
-    });
+  if (!cart) {
+    throw new Error("cart not found", { cause: 404 });
   }
+
+  const shippingCosts = calculateShippingCost(cart.cartItems, shippingAddress);
+
+  //1) order creation
+  // `sequelize.transaction(...)` returns the callback’s return value. If the callback throws an error, the transaction is rolled back and the error is thrown.
+  const order = await sequelize.transaction(async (t) => {
+    //1) order creation
+    const createdOrder = await Order.create(
+      {
+        userId: userId,
+        firstName: shippingAddress.firstName,
+        lastName: shippingAddress.lastName,
+        companyName: shippingAddress.companyName,
+        streetAddress: shippingAddress.streetAddress,
+        zipCode: shippingAddress.zipCode,
+        city: shippingAddress.city,
+        state: shippingAddress.state,
+        country: shippingAddress.country,
+        shippingCosts: shippingCosts,
+      },
+      { transaction: t },
+    );
+
+    // 2) order items creation
+
+    // for every item in the cart, create an order item with the corresponding orderId and productId, and other product details (title, description, price...) at the time of order creation
+    await OrderItem.bulkCreate(
+      cart.cartItems.map((item) => ({
+        orderId: createdOrder.id,
+        productId: item.productId,
+        image: item.image,
+        title: item.title,
+        description: item.description,
+        price: item.price,
+        quantity: item.quantity,
+      })),
+      { transaction: t },
+    );
+
+    // 3) decrement stock of the successfully ordered products in parallel (cartItem belongsTo Product (productId inside the cartItem table), so we can decrement stock of a product by updating the stock field of the product)
+    for (const item of cart.cartItems) {
+      await Product.decrement("stock", {
+        by: item.quantity,
+        where: { id: item.productId },
+        transaction: t,
+      });
+    }
+
+    // 4) clear user cart after successful order creation and product stock update
+    await CartItem.destroy({ where: { cartId: cart.id }, transaction: t });
+    return createdOrder;
+  });
 
   console.log(chalk.green("Order created successfully:"), order);
 
-  // Decrement stock of the successfully ordered products in parallel
-  await Promise.all(
-    order.products.map(
-      async (item) =>
-        await Product.findByIdAndUpdate(
-          item.productId,
-          { $inc: { stock: -item.quantity } },
-          { new: true },
-        ),
-    ),
-  );
-
-  console.log("order.products after stock update", order.products);
-
-  /*    //!solution1: Refetch cart right before clearing to avoid stale __v
-    const freshCart = await Cart.findById(cart._id);
-    freshCart.products = [];
-    await freshCart.save();
-   */
-  // !solution2: Use updateOne/findByIdAndUpdate instead of save() to avoid stale __v (Verwenden Sie updateOne/findByIdAndUpdate statt save(), um veraltete document version number __v zu vermeiden)
-
-  // Clear user cart after successful order creation and product stock update
-  /*   await Cart.updateOne({ _id: cart._id }, { $set: { products: [] } }); */
-
-  await Cart.findByIdAndUpdate(cart._id, { $set: { products: [] } });
   res.status(201).json(order);
 };
 
@@ -1049,7 +1028,8 @@ export const clearUserCart = async (req, res) => {
 //********** POST /users/cart/create-checkout-session **********
 
 export const createCheckoutSession = async (req, res) => {
-  const { cartList, shippingCosts } = req.body;
+  // const { cartList, shippingCosts, shippingAddress } = req.body;
+  const { cartList, shippingAddress } = req.body;
   console.log("cartList", cartList);
   const userId = req.user._id;
 
@@ -1062,6 +1042,16 @@ export const createCheckoutSession = async (req, res) => {
     throw new Error("Cart Is Empty", { cause: 400 });
   }
 
+  // calculate shipping cost in the backend to prevent malicious user from manipulating the shipping cost in the request body to get a lower shipping cost (never trust the client, always validate and recalculate important data in the backend)
+  const cartItems = cartData.products.map((item) => {
+    return {
+      weight: item.productId.weight ?? item.weight,
+      quantity: item.quantity,
+    };
+  });
+
+  const shippingCosts = calculateShippingCost(cartItems, shippingAddress);
+
   // Create line items from cart products
   const lineItems = cartData.products.map((item) => {
     return {
@@ -1069,7 +1059,7 @@ export const createCheckoutSession = async (req, res) => {
         currency: "eur",
         product_data: {
           name: item.productId.title,
-          images: [item.productId.image],
+          images: [item.productId.image], //!stripe api accepts an array of image urls for the product image
           description: item.productId.description,
         },
         unit_amount: Math.round(item.productId.price * 100), // convert to cents
@@ -1742,6 +1732,7 @@ export const getUserLocation = async (req, res) => {
   try {
     // Get the user's IP. 'x-forwarded-for' is crucial for hosting services like Render.
     const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+    const { cartList } = req.body;
 
     // Handle localhost IP for development (returns a default)
     if (ip === "::1" || ip === "127.0.0.1") {
@@ -1757,7 +1748,11 @@ export const getUserLocation = async (req, res) => {
     }
     const locationData = await response.json();
 
-    res.status(200).json(locationData);
+    const country = locationData.country_name;
+
+    const shippingCost = calculateShippingCost(cartList.products, { country });
+
+    res.status(200).json({ country, shippingCost });
   } catch (error) {
     console.error("IP location error:", error);
     // Fallback to a default if detection fails
