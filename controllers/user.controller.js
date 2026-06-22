@@ -466,7 +466,6 @@ export const getOrders = async (req, res) => {
   });
 };
 
-//TODO: add a status to the order
 export const updateOrderStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -565,10 +564,24 @@ export const createOrder = async (req, res) => {
 export const getOrderInvoice = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const order = await Order.findById(id);
-    const admin = await User.findOne({ role: "admin" }).populate(
-      "defaultAddress",
-    );
+    const order = await Order.findByPk(id, {
+      include: [
+        { model: OrderItem, as: "orderItems" },
+        {
+          model: User,
+          as: "user",
+          include: [{ model: Address, as: "defaultAddress" }],
+        },
+      ],
+    });
+    // admin is webseite owner, so we can access the default address of the admin to get the company name and address to display in the invoice header
+
+    const admin = await User.findOne({
+      where: { role: "admin" },
+      include: [{ model: Address, as: "defaultAddress" }],
+    });
+    // find user default address
+
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
@@ -576,7 +589,7 @@ export const getOrderInvoice = async (req, res, next) => {
     console.log("order in getOrderInvoice", order);
 
     let total = 0;
-    const invoiceName = `invoice-${order._id}.pdf`;
+    const invoiceName = `invoice-${order.id}.pdf`;
 
     // Prepare PDF config before streaming
     /*  const fontPathTitle = path.join(__dirname, "..", "font", "Outfit-Bold.ttf");
@@ -610,7 +623,7 @@ export const getOrderInvoice = async (req, res, next) => {
 
     pdf.pipe(res);
 
-    addHeader(pdf, fontPathText, order._id, order.createdAt, order, admin);
+    addHeader(pdf, fontPathText, order.id, order.createdAt, order, admin);
 
     pdf
       .font(fontPathTitle)
@@ -629,7 +642,7 @@ export const getOrderInvoice = async (req, res, next) => {
       .stroke();
     pdf.moveDown();
 
-    for (const product of order.products) {
+    for (const product of order.orderItems) {
       const rowHeight = 20;
 
       if (pdf.y + rowHeight >= pdf.page.height - pdf.page.margins.bottom) {
@@ -724,28 +737,22 @@ export const getOrderInvoice = async (req, res, next) => {
 const addHeader = (doc, fontPath, invoiceId, invoiceDate, order, admin) => {
   doc.font(fontPath);
   // Company name / logo area
-  doc
-    .fontSize(10)
-    .text(`${order?.shippingAddress?.companyName || ""}`, { align: "left" });
+  doc.fontSize(10).text(`${order?.companyName || ""}`, { align: "left" });
 
   doc.moveDown(0.2);
 
-  doc
-    .fontSize(10)
-    .text(
-      `${order?.shippingAddress?.firstName || ""} ${order?.shippingAddress?.lastName || ""}`,
-      { align: "left" },
-    );
+  doc.fontSize(10).text(`${order?.firstName || ""} ${order?.lastName || ""}`, {
+    align: "left",
+  });
 
   doc.moveDown(0.2);
   doc
     .fontSize(10)
-    .text(`${order?.shippingAddress?.streetAddress || ""}`, { align: "left" })
-    .text(
-      `${order?.shippingAddress?.zipCode + " " || ""} ${order?.shippingAddress?.city || ""}`,
-      { align: "left" },
-    )
-    .text(`${order?.shippingAddress?.country || ""}`, { align: "left" });
+    .text(`${order?.streetAddress || ""}`, { align: "left" })
+    .text(`${order?.zipCode + " " || ""} ${order?.city || ""}`, {
+      align: "left",
+    })
+    .text(`${order?.country || ""}`, { align: "left" });
 
   doc.moveUp(4); // move cursor up to same line height as title
   // doc.fontSize(32).text("Order", {
@@ -816,41 +823,45 @@ export const getProductCategories = async (req, res) => {
  *           favorite
  ****************************************/
 
+// PUT /users/products/:id/favorite
 export const updateProductFavorite = async (req, res) => {
   const { isFavorite } = req.body;
-  const userId = req.user._id;
+  const userId = req.user.id;
   const { id } = req.params;
 
   console.log("productId", id);
 
-  const update =
-    isFavorite ?
-      { $addToSet: { favoriteProducts: id } }
-    : { $pull: { favoriteProducts: id } }; //$addToSet adds the product id to the favoriteProducts array if it's not already present, while $pull removes it if isFavorite is false
-
-  const updatedUser = await User.findByIdAndUpdate(userId, update, {
-    new: true,
-  }); //return the updated document
-  if (!updatedUser) {
-    throw new Error("const first = useRef(second) not found", { cause: 404 });
+  if (isFavorite) {
+    await UserFavorites.findOrCreate({
+      where: { userId: userId, productId: id },
+    });
+  } else {
+    await UserFavorites.destroy({ where: { userId: userId, productId: id } });
   }
+
+  const updatedUser = await User.findByPk(userId, {
+    include: [{ model: Product, as: "favoriteProducts" }],
+  });
+
+  if (!updatedUser) {
+    throw new Error("user not found", { cause: 404 });
+  }
+
   res.status(200).json({ updatedUser: updatedUser });
 };
 
+// GET /users/products/favorite
 export const getFavoriteProducts = async (req, res) => {
-  const userId = req.user._id;
+  const userId = req.user.id;
 
-  const user = await User.findById(userId).populate("favoriteProducts");
+  const user = await User.findByPk(userId, {
+    include: [{ model: Product, as: "favoriteProducts" }],
+  });
 
   res.json({
     favoriteProducts: user.favoriteProducts,
     numberOfFavoriteProducts: user.favoriteProducts.length,
   });
-  /*   const favoriteProducts = await Product.find({ isFavorite: true });
-
-    const numberOfFavoriteProducts = favoriteProducts.length;
-
-    res.json({ favoriteProducts, numberOfFavoriteProducts }); */
 };
 
 /****************************************
@@ -858,22 +869,36 @@ export const getFavoriteProducts = async (req, res) => {
  ****************************************/
 //********** GET /users/cart **********
 export const getCartProducts = async (req, res) => {
-  const userId = req.user._id;
-  /* const cart = await Cart.findOne({ userId: userId })
-      .populate({
-        path: 'products.productId',
-        select: 'title price image' // Only populate title, price, and image fields of the product
-      }) */
+  const userId = req.user.id;
 
-  const cart = await Cart.findOne({ userId: userId }).populate(
-    "products.productId",
-  ); //Populating productId for each item within the products array
+  const cartData = await Cart.findOne({
+    where: { userId: userId },
+    include: [
+      {
+        model: CartItem,
+        as: "cartItems",
+        include: [{ model: Product, as: "product" }],
+      },
+    ],
+  });
 
-  if (!cart) {
+  if (!cartData) {
     // throw new Error("Cart not found", { cause: 404 });
     return res.json([]);
   }
 
+  const cart = {
+    id: cartData.id,
+    products: cartData.cartItems.map((item) => ({
+      productId: item.product.toJSON(), //turn model instance into plain js Object
+      quantity: item.quantity,
+      image: item.image,
+      title: item.title,
+      price: item.price,
+      weight: item.weight,
+      description: item.description,
+    })),
+  };
   console.log("########cart########", cart);
   res.json(cart);
 };
