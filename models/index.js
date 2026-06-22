@@ -126,11 +126,15 @@ OrderItem.belongsTo(Order, {
 
 // product can exists without orderItem, but OrderItem cannot exist without product , so product is the strong entity
 // ── Product ↔ OrderItem(1:N) ──
+
 Product.hasMany(OrderItem, {
   foreignKey: "productId",
   as: "orderItems",
 });
 
+/* - means each order item points to one product.
+- the foreign key is on OrderItem (productId).
+ */
 OrderItem.belongsTo(Product, {
   foreignKey: "productId",
   as: "product",
