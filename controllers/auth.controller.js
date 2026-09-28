@@ -40,9 +40,11 @@ export const register = async (req, res) => {
   await Cart.create({ userId: user.id });
 
   // find the user but with password excluded by its model default scope
-  const newUser = await User.findByPk(user.id);
+  // const newUser = await User.findByPk(user.id);
+  const userWithoutPassword = user.toJSON();
+  delete userWithoutPassword.password;
 
-  res.json(newUser);
+  return res.status(201).json(userWithoutPassword);
 };
 
 //********** POST /auth/login **********
@@ -84,7 +86,7 @@ export const login = async (req, res) => {
     expiresIn: process.env.JWT_EXPIRES_IN + "d",
   });
 
-  //get a plain object instead of a sequelize document, and delete the password property from the user object before sending the response back to the client
+  //turn sequelize instance to js object
   const userDoc = user.toJSON();
   delete userDoc.password;
   //store the token in a cookie and set this cookie in the response header
@@ -94,14 +96,14 @@ export const login = async (req, res) => {
     sameSite: process.env.NODE_ENV === "production" ? "lax" : "lax", //(in production) → Allows cross-site requests (needed if frontend and backend run on different domains).
     maxAge: Number(process.env.JWT_EXPIRES_IN) * 24 * 60 * 60 * 1000, // 3 days in ms
     domain:
-      process.env.NODE_ENV === "production" ?
-        ".dev-with-arnaud.work"
-      : undefined,
+      process.env.NODE_ENV === "production"
+        ? ".dev-with-arnaud.work"
+        : undefined,
     path: "/", //to send cookie for all routes
   });
 
   // send the response back to the client including the cookie set in the response header
-  res.json(userDoc);
+  res.status(201).json(userDoc);
 };
 
 //********** POST /auth/logout **********
@@ -113,9 +115,9 @@ export const logout = async (req, res) => {
     secure: process.env.NODE_ENV === "production",
     sameSite: process.env.NODE_ENV === "production" ? "lax" : "lax",
     domain:
-      process.env.NODE_ENV === "production" ?
-        ".dev-with-arnaud.work"
-      : undefined,
+      process.env.NODE_ENV === "production"
+        ? ".dev-with-arnaud.work"
+        : undefined,
     path: "/", // to clear cookie for all routes
   });
 
